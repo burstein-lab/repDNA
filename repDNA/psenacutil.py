@@ -5,7 +5,9 @@ import os
 import pickle
 from math import pow
 
-from repDNA.util import frequency
+import numpy as np
+
+from repDNA.util import frequency, batch_frequency
 from repDNA.nacutil import make_kmer_list
 
 
@@ -151,19 +153,35 @@ def make_pseknc_vector(sequence_list, lamada, w, k, phyche_value, theta_type=1):
     return vector
 
 
-def get_parallel_factor_psednc(lamada, sequence, phyche_value):
-    """Get the corresponding factor theta list.
-       This def is just for dinucleotide."""
-    theta = []
+def get_parallel_factor_psednc(lamada, sequence, phyche_matrix, dinuc_to_idx):
     l = len(sequence)
 
-    for i in range(1, lamada + 1):
-        temp_sum = 0.0
-        for j in range(0, l - 1 - lamada):
-            nucleotide1 = sequence[j] + sequence[j + 1]
-            nucleotide2 = sequence[j + i] + sequence[j + i + 1]
-            temp_sum += parallel_cor_function(nucleotide1, nucleotide2, phyche_value)
+    if l < 2 or lamada <= 0:
+        return [0.0] * lamada
 
+    # Extract all dinucleotides and convert to indices
+    dinucleotides = [sequence[j:j + 2] for j in range(l - 1)]
+    dinuc_indices = np.array([dinuc_to_idx.get(dinuc, 0) for dinuc in dinucleotides])
+
+    # Get property vectors for all dinucleotides
+    all_properties = phyche_matrix[dinuc_indices]  # Shape: (l-1, n_properties)
+
+    theta = []
+
+    for i in range(1, lamada + 1):
+        max_j = l - 1 - lamada
+        if max_j <= 0:
+            theta.append(0.0)
+            continue
+
+        # Vectorized calculation for this lag
+        props1 = all_properties[:max_j]  # First set of properties
+        props2 = all_properties[i:i + max_j]  # Second set (shifted by i)
+
+        # Vectorized squared differences
+        squared_diffs = (props1 - props2) ** 2
+        correlations = np.mean(squared_diffs, axis=1)  # Mean over properties
+        temp_sum = np.sum(correlations)
         theta.append(temp_sum / (l - i - 1))
 
     return theta
@@ -172,38 +190,50 @@ def get_parallel_factor_psednc(lamada, sequence, phyche_value):
 def make_old_pseknc_vector(sequence_list, lamada, w, k, phyche_value, theta_type=1):
     """Generate the pseknc vector."""
     kmer = make_kmer_list(k, ALPHABET)
-    vector = []
+    num_sequences = len(sequence_list)
+    num_kmers = len(kmer)
 
-    for sequence in sequence_list:
-        if len(sequence) < k or lamada + k > len(sequence):
-            error_info = "Sorry, the sequence length must be larger than " + str(lamada + k)
+    # Pre-allocate result array
+    # Each vector has num_kmers + lamada elements
+    vector_length = num_kmers + lamada
+    result = np.zeros((num_sequences, vector_length), dtype=np.float64)
+
+    # Convert phyche_value to numpy arrays once, which is faster to work with
+    dinuc_list = sorted(phyche_value.keys())
+    dinuc_to_idx = {dinuc: i for i, dinuc in enumerate(dinuc_list)}
+    phyche_matrix = np.array([phyche_value[dinuc] for dinuc in dinuc_list])
+
+    for i, sequence in enumerate(sequence_list):
+        seq_len = len(sequence)
+        if seq_len < k or lamada + k > seq_len:
+            error_info = f"Sorry, the sequence length must be larger than {lamada + k}"
             sys.stderr.write(error_info)
             sys.exit(0)
 
-        # Get the nucleotide frequency in the DNA sequence.
-        fre_list = [frequency(sequence, str(key)) for key in kmer]
-        fre_sum = float(sum(fre_list))
+        fre_list = batch_frequency(sequence, kmer)
+        fre_array = np.array(fre_list, dtype=np.float64)
 
-        # Get the normalized occurrence frequency of nucleotide in the DNA sequence.
-        fre_list = [e / fre_sum for e in fre_list]
+        # Normalize frequencies
+        fre_sum = np.sum(fre_array)
+        fre_array /= fre_sum
 
-        # Get the theta_list according the Equation 5.
-        if 1 == theta_type:
-            theta_list = get_parallel_factor_psednc(lamada, sequence, phyche_value)
-        elif 2 == theta_type:
+        # Get theta values
+        if theta_type == 1:
+            theta_list = get_parallel_factor_psednc(lamada, sequence, phyche_matrix, dinuc_to_idx)
+        elif theta_type == 2:
             theta_list = get_series_factor(k, lamada, sequence, phyche_value)
-        theta_sum = sum(theta_list)
 
-        # Generate the vector according the Equation 9.
+        theta_array = np.array(theta_list, dtype=np.float64)
+        theta_sum = np.sum(theta_array)
+
+        # Vectorized final calculation
         denominator = 1 + w * theta_sum
 
-        temp_vec = [round(f / denominator, 3) for f in fre_list]
-        for theta in theta_list:
-            temp_vec.append(round(w * theta / denominator, 4))
+        # Fill result array directly
+        result[i, :num_kmers] = np.round(fre_array / denominator, 3)
+        result[i, num_kmers:] = np.round(w * theta_array / denominator, 4)
 
-        vector.append(temp_vec)
-
-    return vector
+    return result.tolist()
 
 
 if __name__ == '__main__':

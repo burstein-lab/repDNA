@@ -1,5 +1,7 @@
 __author__ = 'Fule Liu'
 
+from collections import Counter
+
 ALPHABET = 'ACGT'
 
 
@@ -215,6 +217,37 @@ def frequency(tol_str, tar_str):
 
     return tar_count
 
+
+def batch_frequency(sequence, kmer_list):
+    """
+    Optimized batch frequency calculation.
+
+    Instead of calling frequency() as the number of k-mers times per sequence,
+    this calculates all k-mer frequencies in one pass.
+
+    Args:
+        sequence: DNA sequence string
+        kmer_list: List of k-mers to count (e.g., ['AAAA', 'AAAT', ...])
+
+    Returns:
+        List of frequencies in the same order as kmer_list
+    """
+    if not kmer_list:
+        return []
+
+    k = len(kmer_list[0])
+
+    if len(sequence) < k:
+        return [0] * len(kmer_list)
+
+    # Extract all k-mers from sequence in one pass
+    sequence_kmers = [sequence[i:i + k] for i in range(len(sequence) - k + 1)]
+
+    # Count all k-mers at once using Counter (C-optimized)
+    kmer_counts = Counter(sequence_kmers)
+
+    # Return frequencies in the same order as input kmer_list
+    return [kmer_counts.get(kmer, 0) for kmer in kmer_list]
 
 def write_libsvm(vector_list, label_list, write_file):
     """Write the vector into disk in livSVM format."""
