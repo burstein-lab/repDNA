@@ -1,0 +1,4 @@
+*.ipynb
+/.idea
+/repDNA/__pycache__
+/test_data
